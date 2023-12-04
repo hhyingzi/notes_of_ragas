@@ -13,6 +13,7 @@ from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 from ragas.metrics.base import EvaluationMode, MetricWithLLM
 
+# Prompt大意：请从提供的上下文中提取出与回答以下问题绝对必需的相关句子。如果找不到相关的句子，或者您认为无法从给定的上下文回答问题，请返回短语 "Insufficient Information"。在提取候选句子时，您不允许对给定上下文中的句子进行任何更改。
 CONTEXT_RELEVANCE = HumanMessagePromptTemplate.from_template(
     """\
 Please extract relevant sentences from the provided context that is absolutely required answer the following question. If no relevant sentences are found, or if you believe the question cannot be answered from the given context, return the phrase "Insufficient Information".  While extracting candidate sentences you're not allowed to make any changes to sentences from given context.

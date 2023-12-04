@@ -9,30 +9,16 @@ from langchain.callbacks.manager import CallbackManager, trace_as_chain_group
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 from ragas.metrics.base import EvaluationMode, MetricWithLLM
-from ragas.utils import load_as_json
 
+# prompt 大意：给定一个问题和一个上下文，验证给定上下文中的信息是否有用于回答问题。返回一个是/否的答案。
 CONTEXT_PRECISION = HumanMessagePromptTemplate.from_template(
     """\
-Verify if the information in the given context is useful in answering the question.
-
-question: What are the health benefits of green tea?
-context: 
-This article explores the rich history of tea cultivation in China, tracing its roots back to the ancient dynasties. It discusses how different regions have developed their unique tea varieties and brewing techniques. The article also delves into the cultural significance of tea in Chinese society and how it has become a symbol of hospitality and relaxation.
-verification:
-{{"reason":"The context, while informative about the history and cultural significance of tea in China, does not provide specific information about the health benefits of green tea. Thus, it is not useful for answering the question about health benefits.", "verdict":"No"}}
-
-question: How does photosynthesis work in plants?
-context:
-Photosynthesis in plants is a complex process involving multiple steps. This paper details how chlorophyll within the chloroplasts absorbs sunlight, which then drives the chemical reaction converting carbon dioxide and water into glucose and oxygen. It explains the role of light and dark reactions and how ATP and NADPH are produced during these processes.
-verification:
-{{"reason":"This context is extremely relevant and useful for answering the question. It directly addresses the mechanisms of photosynthesis, explaining the key components and processes involved.", "verdict":"Yes"}}
-
+Given a question and a context, verify if the information in the given context is useful in answering the question. Return a Yes/No answer.
 question:{question}
-context:
-{context}
-verification:"""  # noqa: E501
+context:\n{context}
+answer:
+"""
 )
-
 
 @dataclass
 class ContextPrecision(MetricWithLLM):
@@ -51,55 +37,58 @@ class ContextPrecision(MetricWithLLM):
     evaluation_mode: EvaluationMode = EvaluationMode.qc
     batch_size: int = 15
 
+    # 用于计算批处理数据得分的函数
     def _score_batch(
         self: t.Self,
         dataset: Dataset,
         callbacks: t.Optional[CallbackManager] = None,
         callback_group_name: str = "batch",
     ) -> list:
-        prompts = []
-        questions, contexts = dataset["question"], dataset["contexts"]
+        prompts = []  # 存储提示的列表
+        questions, contexts = dataset["question"], dataset["contexts"]  # 从数据集中提取问题和上下文
+        # 使用上下文管理器跟踪带有回调函数的批处理操作
         with trace_as_chain_group(
             callback_group_name, callback_manager=callbacks
         ) as batch_group:
+            # 遍历每个问题和上下文列表对
             for qstn, ctx in zip(questions, contexts):
+                # 对问题和上下文生成 prompt
                 human_prompts = [
                     ChatPromptTemplate.from_messages(
-                        [CONTEXT_PRECISION.format(question=qstn, context=c)]
+                        [CONTEXT_PRECISION.format(question=qstn, context=c)]  # 配对为[question, c]
                     )
-                    for c in ctx
+                    for c in ctx  # 对 context[] 中的每个子元素 c
                 ]
-
+                # 将生成的prompt添加到列表中
                 prompts.extend(human_prompts)
-
+            # 初始化存储响应的列表
             responses: list[list[str]] = []
+            # 对每个 prompt 生成一个响应，响应用来判断“上下文中的信息是否有助于回答问题”，是则响应中含有 "yes" 字符串
             results = self.llm.generate(
                 prompts,
                 n=1,
                 callbacks=batch_group,
             )
+            # 从 results 的响应中提取文本，获取最终的响应（针对每个问题）
             responses = [[i.text for i in r] for r in results.generations]
-            context_lens = [len(ctx) for ctx in contexts]
-            context_lens.insert(0, 0)
-            context_lens = np.cumsum(context_lens)
+            context_lens = [len(ctx) for ctx in contexts]  # 将 contexts 列表中每个元素 ctx 的长度存储到列表中
+            context_lens.insert(0, 0)  # 开头插入元素 0
+            context_lens = np.cumsum(context_lens)  # 计算 context 总长度
+            # 将 response 进行切分
             grouped_responses = [
                 responses[start:end]
                 for start, end in zip(context_lens[:-1], context_lens[1:])
             ]
             scores = []
 
+            # 进行打分
             for response in grouped_responses:
-                response = [load_as_json(item) for item in sum(response, [])]
-                response = [
-                    int("yes" in resp.get("verdict", " ").lower())
-                    if resp.get("verdict")
-                    else np.nan
-                    for resp in response
-                ]
-                denominator = sum(response) + 1e-10
+                # response 中的每个item，有 yes 字段就转换成1，没有就是 0。把response这样组织成列表。
+                response = [int("Yes" in resp) for resp in response]  # [1, 0, 1, 1, 0, 1, ...]
+                denominator = sum(response) + 1e-10  # 分母就是列表中 1 的数量。不计算 0，因为用 count() 才会计算0。
                 numerator = sum(
                     [
-                        (sum(response[: i + 1]) / (i + 1)) * response[i]
+                        (sum(response[: i + 1]) / (i + 1)) * response[i]  # response[] 中每个元素 resp 的位置评分 (位置 i 前面所有 1 的和)/ i
                         for i in range(len(response))
                     ]
                 )

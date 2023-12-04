@@ -85,30 +85,32 @@ class AnswerRelevancy(MetricWithLLM):
                 n=self.strictness,
                 callbacks=batch_group,
             )
-            results = [[i.text for i in r] for r in results.generations]
+            results = [[i.text for i in r] for r in results.generations]  # self.strictness=3，所以结果中含有为answer生成的3个问题。
 
             scores = []
             for question, gen_questions in zip(questions, results):
-                if question is not None and question != "" and len(gen_questions) > 0:
-                    cosine_sim = self.calculate_similarity(question, gen_questions)
-                    scores.append(cosine_sim.mean())
-                else:
-                    scores.append(0.0)
+                cosine_sim = self.calculate_similarity(question, gen_questions) # 计算余弦相似度值 [0.5, 0.8, ...]
+                scores.append(cosine_sim.mean())  # 对每个 question 和其所有 gen_questions 的余弦相似度取平均值，得到最终值 score
 
         return scores
 
+    # 计算 question 和 generated_questions 的相似度，最终返回的是一个 余弦相似度列表[0.5, 0.8, ...]
     def calculate_similarity(
         self: t.Self, question: str, generated_questions: list[str]
     ):
         assert self.embeddings is not None
-        question_vec = np.asarray(self.embeddings.embed_query(question)).reshape(1, -1)
+        # langchain.embeddings 在本项目中的实现在：src/ragas/embeddings/base.py
+        question_vec = np.asarray(self.embeddings.embed_query(question)).reshape(1, -1)  # Langchain 的Embedding相关函数，返回一个 List[float]
         gen_question_vec = np.asarray(
-            self.embeddings.embed_documents(generated_questions)
+            self.embeddings.embed_documents(generated_questions)  # Langchain 的Embedding相关函数，返回一个List[List[float]]
         )
+        # 求余弦相似度
+        # 计算分母||A|| * ||B||，其中norm(A)是计算范式 ||A||
         norm = np.linalg.norm(gen_question_vec, axis=1) * np.linalg.norm(
             question_vec, axis=1
         )
         return (
+            # reshape(-1) 将二维数组展平成一维数组，如 [12, 42, 1, 4, 3, 23, ...]
             np.dot(gen_question_vec, question_vec.T).reshape(
                 -1,
             )
